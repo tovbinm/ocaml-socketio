@@ -201,7 +201,7 @@ let connection ~conns ~conn req =
      let body = Packet.(to_string (Connect None)) in
      Cohttpd.Server.respond ~body ()
   | _ ->
-    Lwt_unix.sleep conn.Connection.heartbeat >>
+    Lwt_unix.sleep (float_of_int conn.Connection.heartbeat) >>
     let body = Packet.(to_string (Message (None, None, "wassu"))) in
     let uni = String.create 3 in
     uni.[0] <- Char.chr 0xef;

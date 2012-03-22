@@ -10,7 +10,7 @@ BuildTools:  ocamlbuild
 Library socketio
   Path:       lib
   Findlibname: socketio
-  Modules: SocketIO
+  Modules: Socketio
   BuildDepends:	lwt.syntax, lwt, yojson, cohttpd
 
 Executable socketio_test
