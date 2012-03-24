@@ -11,7 +11,7 @@ Library socketio
   Path:       lib
   Findlibname: socketio
   Modules: Socketio
-  BuildDepends:	lwt.syntax, lwt, yojson, cohttpd
+  BuildDepends:	cryptokit, lwt.syntax, lwt, yojson, cohttpd
 
 Executable socketio_test
   Path: lib_test

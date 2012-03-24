@@ -20,10 +20,14 @@ open Printf
 module Transport = struct
   type transport =
     | XHR_polling
+    | Web_socket
 
   let to_string =
     function
     | XHR_polling -> "xhr-polling"
+    | Web_socket -> "websocket"
+
+  let transports_str = String.concat "," (List.map to_string [Web_socket; XHR_polling])
 
   type state =
     | Closed
@@ -42,10 +46,7 @@ module Connection = struct
     
   let make_sid =
     (* TODO XXX This might be need to be a tad more secure *)
-    let ctr = ref 0 in
-    fun () ->
-      incr ctr;
-      Printf.sprintf "sid%d" !ctr
+    fun () -> Int64.to_string (Random.int64 Int64.max_int)
 
   type state = 
     | Connected
@@ -88,7 +89,7 @@ module Connection = struct
     in
     t, state
 
-  let add ~conns ?(heartbeat=15) ?(timeout=10) () =
+  let add ~conns ?(heartbeat=60) ?(timeout=60) () =
     let sid = make_sid () in
     let tx, tx_push = Lwt_stream.create () in
     let rx, rx_push = Lwt_stream.create () in
@@ -101,9 +102,8 @@ module Connection = struct
     try Some (Hashtbl.find conns.active sid)
     with Not_found -> None
 
-  let string_of_conn conn =
-    sprintf "%s:%d:%d:%s" conn.sid conn.heartbeat conn.timeout
-      (String.concat "," (List.map Transport.to_string [Transport.XHR_polling]))
+  let string_of_conn conn =    
+    sprintf "%s:%d:%d:%s" conn.sid conn.heartbeat conn.timeout Transport.transports_str
  
 end
 
@@ -193,11 +193,20 @@ let create ~conns req =
   let body = Connection.string_of_conn conn in
   Cohttpd.Server.respond ~body ()
 
-let connection ~conns ~conn req = 
+let connection ~conns ~conn ~trans req = 
   lwt body = Cohttp.Message.string_of_body (Cohttp.Request.body req) in
-  let m = Packet.of_string body in
-  match conn.Connection.state with
-  | Connection.Connecting ->
+  match conn.Connection.state, trans with
+  | Connection.Connecting, "websocket" ->  
+    let status = `Code 101 in
+    let cl_key = List.hd (Cohttp.Request.header req "Sec-WebSocket-Key") in
+    let hash = Cryptokit.Hash.sha1 () in
+    hash#add_string (cl_key ^ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    let upg_key = Cryptokit.transform_string (Cryptokit.Base64.encode_multiline ()) hash#result  in
+    let headers = ["Upgrade","websocket";
+		   "Connection","Upgrade";
+		   "Sec-WebSocket-Accept",upg_key] in     
+     Cohttpd.Server.respond ~headers ~status ()
+  | Connection.Connecting, _ ->
      let body = Packet.(to_string (Connect None)) in
      Cohttpd.Server.respond ~body ()
   | _ ->
@@ -212,20 +221,20 @@ let connection ~conns ~conn req =
 
 let callback (server_t,conns) id req =
   let open Cohttp.Request in
+  let open Re_str in 
   Printf.printf "%s %s\n%!" (Cohttp.Common.string_of_method (meth req)) (Cohttp.Types.(path req));
 (*  List.iter (fun (k,v) -> Printf.printf "  %s: %s\n%!" k v) (headers req); *)
-  match meth req, (Re_str.(split (regexp_string "/") (path req))) with
+  match meth req, split (regexp_string "/") (path req) with
   |`GET, ([]|[""]) ->
-    Cohttpd.Server.respond_file ~fname:"lib_test/index.html"
+    Cohttpd.Server.respond_file ~fname:"lib/index.html" 
       ~mime_type:"application/html" ()
   |`GET, ["socket.io.js"] ->
-    Cohttpd.Server.respond_file ~fname:"lib_test/socket.io.js"
+    Cohttpd.Server.respond_file ~fname:"lib/socket.io.js"
       ~mime_type:"application/javascript" ()
   |`GET, "socket.io"::"1"::[] -> create ~conns req
-  |(`GET|`POST), "socket.io"::"1"::"xhr-polling"::sid::_ -> begin
+  |(`GET|`POST), "socket.io"::"1"::trans::sid::_ -> begin
      match Connection.get ~conns ~sid with
      |None -> Cohttpd.Server.respond_error ()
-     |Some conn -> connection ~conns ~conn req
-  end
+     |Some conn -> connection ~conns ~conn ~trans req
+  end   
   |_,_ -> Cohttpd.Server.respond_error ()
-
