@@ -64,7 +64,7 @@ module Connection = struct
   (* An individual connection *)
   type conn = {
     sid: string;
-    state: state;
+    mutable state: state;
     heartbeat: int;
     timeout: int;
     tx: string Lwt_stream.t; 
@@ -104,7 +104,8 @@ module Connection = struct
 
   let string_of_conn conn =    
     sprintf "%s:%d:%d:%s" conn.sid conn.heartbeat conn.timeout Transport.transports_str
- 
+
+  let set_state ~conn state = conn.state <- state
 end
 
 let make_server () =
@@ -196,16 +197,19 @@ let create ~conns req =
 let connection ~conns ~conn ~trans req = 
   lwt body = Cohttp.Message.string_of_body (Cohttp.Request.body req) in
   match conn.Connection.state, trans with
-  | Connection.Connecting, "websocket" ->  
-    let status = `Code 101 in
-    let cl_key = List.hd (Cohttp.Request.header req "Sec-WebSocket-Key") in
-    let hash = Cryptokit.Hash.sha1 () in
-    hash#add_string (cl_key ^ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    let upg_key = Cryptokit.transform_string (Cryptokit.Base64.encode_multiline ()) hash#result  in
-    let headers = ["Upgrade","websocket";
-		   "Connection","Upgrade";
-		   "Sec-WebSocket-Accept",upg_key] in     
-     Cohttpd.Server.respond ~headers ~status ()
+  | Connection.Connecting, "websocket" -> 
+    begin 
+      let status = `Code 101 in
+      let cl_key = List.hd (Cohttp.Request.header req "Sec-WebSocket-Key") in
+      let hash = Cryptokit.Hash.sha1 () in
+      hash#add_string (cl_key ^ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+      let upg_key = Cryptokit.transform_string (Cryptokit.Base64.encode_multiline ()) hash#result  in
+      let headers = ["Upgrade","websocket";
+		     "Connection","Upgrade";
+		     "Sec-WebSocket-Accept",upg_key] in
+      Connection.set_state ~conn Connection.Connected;
+      Cohttpd.Server.respond ~headers ~status ()
+    end
   | Connection.Connecting, _ ->
      let body = Packet.(to_string (Connect None)) in
      Cohttpd.Server.respond ~body ()
